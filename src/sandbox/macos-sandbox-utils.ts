@@ -599,6 +599,12 @@ function generateSandboxProfile({
   // Network rules
   profile.push('; Network')
   if (!needsNetworkRestriction) {
+    // network.unrestricted. No extra mach-lookup entries are added here on
+    // purpose: verified that under (allow network*) getaddrinfo, curl's
+    // HTTPS handshake and node's fetch all succeed with the mach allowlist
+    // above, even though the profile is (deny default) and lists no
+    // resolver or trustd service. If a specific runtime needs one,
+    // allowMachLookup is the user-level escape hatch.
     profile.push('(allow network*)')
   } else {
     // Allow local binding if requested.

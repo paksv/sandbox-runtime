@@ -122,6 +122,14 @@ export type WindowsSandboxErrorCode =
    * the failing root on `.drive` ({@link MappedDriveCwdError}).
    */
   | 'mapped_drive_cwd'
+  /**
+   * `network.unrestricted` was set. The WFP egress fence is keyed on
+   * the `srt-sandbox` SID and is install-scoped, not session-scoped:
+   * it PERMITs only the loopback proxy port range, so skipping the
+   * proxy would leave the child with no network at all rather than
+   * with unfiltered network. Rejected at `initialize()`.
+   */
+  | 'unrestricted_network_unsupported'
 
 /**
  * Error thrown by the Windows sandbox backend. Carries a stable

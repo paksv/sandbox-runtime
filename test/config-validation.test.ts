@@ -1945,4 +1945,142 @@ describe('Config Validation', () => {
       })
     })
   })
+
+  describe('network.unrestricted', () => {
+    const base = {
+      network: { allowedDomains: [], deniedDomains: [] },
+      filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+    }
+
+    test('is optional — omitting it leaves the parsed config unchanged', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse(base)
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.network.unrestricted).toBeUndefined()
+      }
+    })
+
+    test('accepts unrestricted: true on its own', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: { ...base.network, unrestricted: true },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.network.unrestricted).toBe(true)
+      }
+    })
+
+    test('accepts unrestricted: false', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: { ...base.network, unrestricted: false },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    test('accepts the allowlist fields alongside it — they are ignored, not rejected', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: {
+          allowedDomains: ['*.example.com'],
+          deniedDomains: ['evil.com'],
+          strictAllowlist: true,
+          allowLocalBinding: true,
+          unrestricted: true,
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    test.each([
+      ['tlsTerminate', { caCertPath: '/etc/ca.crt', caKeyPath: '/etc/ca.key' }],
+      ['mitmProxy', { socketPath: '/tmp/mitm.sock', domains: ['example.com'] }],
+      ['filterRequest', () => ({ action: 'allow' as const })],
+      ['parentProxy', { http: 'http://proxy.example.com:3128' }],
+      ['httpProxyPort', 8080],
+      ['socksProxyPort', 1080],
+    ])('rejects network.%s, naming the conflicting key', (key, value) => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: { ...base.network, unrestricted: true, [key]: value },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        const issue = result.error.issues.find(
+          i => i.path.join('.') === `network.${key}`,
+        )
+        expect(issue?.message).toContain(`network.${key}`)
+        expect(issue?.message).toContain('network.unrestricted')
+      }
+    })
+
+    test('rejects a masked credentials.envVars entry', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: {
+          allowedDomains: ['api.example.com'],
+          deniedDomains: [],
+          unrestricted: true,
+        },
+        credentials: {
+          allowPlaintextInject: true,
+          envVars: [{ name: 'TOKEN', mode: 'mask' }],
+        },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        const issue = result.error.issues.find(
+          i => i.path.join('.') === 'credentials.envVars.0.mode',
+        )
+        expect(issue?.message).toContain('network.unrestricted')
+      }
+    })
+
+    test('rejects a masked credentials.files entry', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: {
+          allowedDomains: ['api.example.com'],
+          deniedDomains: [],
+          unrestricted: true,
+        },
+        credentials: {
+          allowPlaintextInject: true,
+          files: [{ path: '/home/user/.token', mode: 'mask' }],
+        },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        const issue = result.error.issues.find(
+          i => i.path.join('.') === 'credentials.files.0.mode',
+        )
+        expect(issue?.message).toContain('network.unrestricted')
+      }
+    })
+
+    test('accepts mode "deny" credentials — env-deny needs no proxy', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: { ...base.network, unrestricted: true },
+        credentials: {
+          envVars: [{ name: 'TOKEN', mode: 'deny' }],
+          files: [{ path: '/home/user/.token', mode: 'deny' }],
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    test('the conflict checks do not fire when unrestricted is absent', () => {
+      const result = SandboxRuntimeConfigSchema.safeParse({
+        ...base,
+        network: {
+          ...base.network,
+          httpProxyPort: 8080,
+          parentProxy: { http: 'http://proxy.example.com:3128' },
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+  })
 })

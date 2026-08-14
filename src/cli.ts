@@ -147,6 +147,11 @@ async function main(): Promise<void> {
       'read config updates from file descriptor (JSON lines protocol)',
       parseInt,
     )
+    .option(
+      '--unrestricted-network',
+      'disable all network filtering (no proxy; not supported on Windows). ' +
+        'Filesystem restrictions still apply.',
+    )
     .allowUnknownOption()
     .action(
       async (
@@ -156,6 +161,7 @@ async function main(): Promise<void> {
           settings?: string
           c?: string
           controlFd?: number
+          unrestrictedNetwork?: boolean
         },
       ) => {
         try {
@@ -204,6 +210,17 @@ async function main(): Promise<void> {
                 ...runtimeConfig.windows,
                 srtWin: { path: VENDORED_SRT_WIN_EXE },
               },
+            }
+          }
+
+          // Layered last so it applies to a settings file and to
+          // getDefaultConfig() alike. initialize() still validates the
+          // combination, so a settings file with proxy-only options
+          // (tlsTerminate, masked credentials, ...) fails loudly.
+          if (options.unrestrictedNetwork) {
+            runtimeConfig = {
+              ...runtimeConfig,
+              network: { ...runtimeConfig.network, unrestricted: true },
             }
           }
 

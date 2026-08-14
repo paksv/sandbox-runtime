@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isWindows } from './helpers/platform.js'
 
 /**
  * Get the path to the CLI entry point
@@ -165,6 +166,54 @@ describe('CLI', () => {
         ])
         expect(result.status).toBe(1)
         expect(result.stderr).toContain('Could not load settings')
+        expect(result.stdout).not.toContain('should-not-run')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  })
+
+  // Gated off Windows: the flag is rejected at initialize() there (the WFP
+  // egress fence is keyed on the sandbox SID, so skipping the proxy would
+  // mean no network at all).
+  describe.if(!isWindows)('--unrestricted-network', () => {
+    test('runs the command with no proxy env vars', () => {
+      const result = runCli([
+        '--unrestricted-network',
+        '-c',
+        'printf "[%s][%s]" "$HTTP_PROXY" "$SANDBOX_RUNTIME"',
+      ])
+      expect(result.status).toBe(0)
+      expect(result.stdout).toBe('[][1]')
+    })
+
+    test('does not bypass validation for a conflicting settings file', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'srt-cli-unrestricted-'))
+      const settingsPath = join(dir, 'settings.json')
+      // Valid on its own, but httpProxyPort needs the proxy the flag
+      // disables. The file never sees the flag, so only the runtime guard
+      // in initialize() can catch this.
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          network: {
+            allowedDomains: [],
+            deniedDomains: [],
+            httpProxyPort: 3128,
+          },
+          filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+        }),
+      )
+      try {
+        const result = runCli([
+          '--unrestricted-network',
+          '--settings',
+          settingsPath,
+          'echo',
+          'should-not-run',
+        ])
+        expect(result.status).toBe(1)
+        expect(result.stderr).toContain('network.httpProxyPort')
         expect(result.stdout).not.toContain('should-not-run')
       } finally {
         rmSync(dir, { recursive: true, force: true })

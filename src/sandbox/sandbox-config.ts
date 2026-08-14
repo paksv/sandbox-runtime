@@ -707,6 +707,22 @@ export const CredentialsConfigSchema = z
  * Network configuration schema for validation
  */
 export const NetworkConfigSchema = z.object({
+  unrestricted: z
+    .boolean()
+    .optional()
+    .describe(
+      'Disable ALL network policy enforcement. When true, no proxy is ' +
+        'started and the sandboxed process talks to the network directly ' +
+        '(macOS: the seatbelt profile allows network access; Linux: bwrap ' +
+        'does not unshare the network namespace, so the process shares the ' +
+        "host's namespace and can reach host loopback services). " +
+        'allowedDomains/deniedDomains/strictAllowlist/allowLocalBinding are ' +
+        'ignored, and there is no request audit, filterRequest, TLS ' +
+        'termination or credential injection. Not supported on Windows, ' +
+        'where egress is fenced for the sandbox account machine-wide. ' +
+        'Filesystem, seccomp and credential env-deny restrictions still ' +
+        'apply.',
+    ),
   allowedDomains: z
     .array(domainPortPatternSchema)
     .describe(
@@ -1371,6 +1387,79 @@ export const SandboxRuntimeConfigSchema = z
           'Credential masking requires network.tlsTerminate so substitution ' +
           'runs only over a verified TLS connection. Enable tlsTerminate, or ' +
           'set credentials.allowPlaintextInject to opt out (not recommended).',
+      })
+    }
+  })
+  // A separate block on purpose: the credentials refine above early-returns
+  // when `credentials` is absent, which would skip these checks.
+  .superRefine((cfg, ctx) => {
+    if (!cfg.network.unrestricted) return
+
+    // network.unrestricted starts no proxy at all, so every option that is
+    // implemented *inside* that proxy would silently do nothing. The
+    // allowlist fields (allowedDomains/deniedDomains/strictAllowlist/
+    // allowLocalBinding) are merely ignored instead — same posture as
+    // filesystem.disabled vs denyRead — so a host can keep a static policy
+    // and flip the escape hatch per run.
+    const conflict = (key: string, why: string) => {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['network', key],
+        message:
+          `network.${key} requires the SRT proxy, but ` +
+          `network.unrestricted disables it — ${why} Remove one of the two.`,
+      })
+    }
+
+    if (cfg.network.tlsTerminate !== undefined) {
+      conflict('tlsTerminate', 'no HTTPS connection is intercepted.')
+    }
+    if (cfg.network.mitmProxy !== undefined) {
+      conflict('mitmProxy', 'no traffic is routed to the upstream socket.')
+    }
+    if (cfg.network.filterRequest !== undefined) {
+      conflict('filterRequest', 'no request ever reaches the callback.')
+    }
+    if (cfg.network.parentProxy !== undefined) {
+      conflict('parentProxy', 'connections go out directly.')
+    }
+    if (cfg.network.httpProxyPort !== undefined) {
+      conflict(
+        'httpProxyPort',
+        'the sandboxed process is never pointed at an HTTP proxy.',
+      )
+    }
+    if (cfg.network.socksProxyPort !== undefined) {
+      conflict(
+        'socksProxyPort',
+        'the sandboxed process is never pointed at a SOCKS proxy.',
+      )
+    }
+
+    // Masking is the sharpest case: substitution happens in the proxy, so
+    // without one the command receives a sentinel nothing ever replaces —
+    // no leak, but silently broken auth. mode "deny" needs no proxy and
+    // stays valid. awsPairs/sigv4 are covered transitively: both require
+    // masked envVars entries.
+    const maskedBy = (mode: string) =>
+      `Credential masking substitutes the real value in the SRT proxy, but ` +
+      `network.unrestricted disables it — the sandboxed command would ` +
+      `receive a sentinel nothing ever replaces. Use mode "${mode}", or ` +
+      `remove network.unrestricted.`
+    for (const [idx, v] of (cfg.credentials?.envVars ?? []).entries()) {
+      if (v.mode !== 'mask') continue
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['credentials', 'envVars', idx, 'mode'],
+        message: maskedBy('deny'),
+      })
+    }
+    for (const [idx, f] of (cfg.credentials?.files ?? []).entries()) {
+      if (f.mode !== 'mask') continue
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['credentials', 'files', idx, 'mode'],
+        message: maskedBy('deny'),
       })
     }
   })

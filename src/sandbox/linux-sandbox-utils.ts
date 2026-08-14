@@ -1900,6 +1900,14 @@ export async function wrapCommandWithSandboxLinux(
         }
       }
       // If no sockets provided, network is completely blocked (--unshare-net without proxy)
+    } else {
+      // network.unrestricted: no --unshare-net, so the child stays in the
+      // HOST network namespace. Egress is unfiltered AND host loopback
+      // services (a local DB, another SRT proxy) are reachable.
+      logForDebugging(
+        '[Sandbox] network unrestricted: sharing the host network ' +
+          'namespace (no --unshare-net, no proxy bridge)',
+      )
     }
 
     // ========== FILESYSTEM RESTRICTIONS ==========

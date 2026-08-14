@@ -612,6 +612,23 @@ async function initialize(
       'network.tlsTerminate and network.mitmProxy are mutually exclusive',
     )
   }
+  const unrestrictedNetwork = runtimeConfig.network.unrestricted === true
+  if (unrestrictedNetwork) {
+    try {
+      assertUnrestrictedNetworkCompatible(runtimeConfig)
+    } catch (e) {
+      config = undefined
+      throw e
+    }
+    // Loud on purpose: the escape hatch must be visible in host logs.
+    logForDebugging(
+      'network.unrestricted is set — the sandboxed process reaches the ' +
+        'network directly and its egress is NOT filtered (no proxy, no ' +
+        'request audit). Filesystem, seccomp and credential env-deny ' +
+        'restrictions still apply.',
+      { level: 'warn' },
+    )
+  }
   // On Windows with tlsTerminate and no explicit caCertPath/caKeyPath,
   // defer CA creation until the Windows block below has resolved
   // srt-win and fetched user status — the persistent CA is
@@ -676,6 +693,20 @@ async function initialize(
   // wrap-time) means the host gets a single actionable error before
   // any per-exec work happens, instead of exit-15 on every command.
   if (getPlatform() === 'windows') {
+    // The WFP egress fence is keyed on the srt-sandbox SID and is
+    // install-scoped, not session-scoped: skipping the proxy here would
+    // hand back a child with ZERO connectivity — the opposite of what the
+    // flag promises. Fail before any provisioning work happens.
+    if (unrestrictedNetwork) {
+      config = undefined
+      throw new WindowsSandboxError(
+        'unrestricted_network_unsupported',
+        `network.unrestricted is not supported on Windows: egress for the ` +
+          `sandbox user is blocked machine-wide by the WFP fence, which ` +
+          `only permits the loopback proxy port range, so bypassing the ` +
+          `proxy yields no network at all. Remove network.unrestricted.`,
+      )
+    }
     // Resolve once (stats disk); captured module-level for wrap/reset.
     srtWinSpawn = resolveSrtWin(runtimeConfig.windows?.srtWin)
     const srtWin = srtWinSpawn
@@ -843,6 +874,17 @@ async function initialize(
       config = undefined
       throw e
     }
+  }
+
+  // Nothing to initialize when network policy is off: no proxy listener, no
+  // Linux socat bridge, no auth token. managerContext stays undefined, so
+  // getProxyPort()/getSocksProxyPort() report undefined and reset() has
+  // nothing to tear down.
+  if (unrestrictedNetwork) {
+    logForDebugging(
+      'Skipping network infrastructure — network.unrestricted is set',
+    )
+    return
   }
 
   // Initialize network infrastructure
@@ -1377,6 +1419,62 @@ function getAllowLocalBinding(): boolean | undefined {
   return config?.network?.allowLocalBinding
 }
 
+/**
+ * True when network policy is switched off entirely for this wrap.
+ *
+ * Precedence mirrors `filesystem.disabled` (see wrapWithSandbox): when a
+ * caller passes a per-call `network` override at all, its `unrestricted`
+ * (defaulting to false) wins outright — a global unrestricted=true must not
+ * silently discard a per-call tightening that omits the key.
+ */
+function isNetworkUnrestricted(
+  customConfig?: Partial<SandboxRuntimeConfig>,
+): boolean {
+  if (customConfig?.network !== undefined) {
+    return customConfig.network.unrestricted === true
+  }
+  return config?.network.unrestricted === true
+}
+
+/**
+ * Reject `network.unrestricted` paired with options that only exist inside
+ * the SRT proxy — which is never started when the flag is set.
+ *
+ * Duplicates the SandboxRuntimeConfigSchema checks on purpose: initialize()
+ * takes an already-typed config, so a library consumer that builds the
+ * object in code never goes through zod.
+ */
+function assertUnrestrictedNetworkCompatible(cfg: SandboxRuntimeConfig): void {
+  const net = cfg.network
+  const conflicts: string[] = []
+  if (net.tlsTerminate !== undefined) conflicts.push('network.tlsTerminate')
+  if (net.mitmProxy !== undefined) conflicts.push('network.mitmProxy')
+  if (net.filterRequest !== undefined) conflicts.push('network.filterRequest')
+  if (net.parentProxy !== undefined) conflicts.push('network.parentProxy')
+  if (net.httpProxyPort !== undefined) conflicts.push('network.httpProxyPort')
+  if (net.socksProxyPort !== undefined) conflicts.push('network.socksProxyPort')
+  const masked = [
+    ...(cfg.credentials?.envVars ?? []).map(v => ({
+      what: `credentials.envVars "${v.name}"`,
+      mode: v.mode,
+    })),
+    ...(cfg.credentials?.files ?? []).map(f => ({
+      what: `credentials.files "${f.path}"`,
+      mode: f.mode,
+    })),
+  ].filter(e => e.mode === 'mask')
+  // Masking is the sharpest case: the substitution happens in the proxy, so
+  // without one the child receives a sentinel nothing ever replaces.
+  conflicts.push(...masked.map(e => `${e.what} (mode "mask")`))
+  if (conflicts.length > 0) {
+    throw new Error(
+      `network.unrestricted disables the SRT proxy, but these options ` +
+        `require it: ${conflicts.join(', ')}. Remove them, or drop ` +
+        `network.unrestricted.`,
+    )
+  }
+}
+
 function getAllowMachLookup(): string[] | undefined {
   return config?.network?.allowMachLookup
 }
@@ -1610,15 +1708,20 @@ async function wrapWithSandbox(
     customConfig?.network?.allowedDomains !== undefined ||
     config?.network?.allowedDomains !== undefined
 
+  // network.unrestricted switches the whole layer off: the allowlist fields
+  // are ignored and both POSIX wrappers take their no-restriction branch
+  // (macOS emits `(allow network*)`; Linux does not --unshare-net).
+  const unrestrictedNetwork = isNetworkUnrestricted(customConfig)
+
   // Network RESTRICTION is needed whenever network config is specified
   // This includes empty allowedDomains which means "block all network"
-  const needsNetworkRestriction = hasNetworkConfig
+  const needsNetworkRestriction = hasNetworkConfig && !unrestrictedNetwork
 
   // Network PROXY is needed whenever network config is specified
   // Even with empty allowedDomains, we route through proxy so that:
   // 1. updateConfig() can enable network access for already-running processes
   // 2. The proxy blocks all requests when allowlist is empty
-  const needsNetworkProxy = hasNetworkConfig
+  const needsNetworkProxy = hasNetworkConfig && !unrestrictedNetwork
 
   // Wait for network initialization only if proxy is actually needed
   if (needsNetworkProxy) {
@@ -1897,6 +2000,21 @@ function getConfig(): SandboxRuntimeConfig | undefined {
  * @param newConfig - The new configuration to use
  */
 function updateConfig(newConfig: SandboxRuntimeConfig): void {
+  // The proxy/bridge topology is decided at initialize(): flipping the flag
+  // here cannot start a proxy that was never created (or tear one down).
+  // Same posture as the Windows ACL stamp-set warning below.
+  if (
+    config &&
+    (newConfig.network.unrestricted ?? false) !==
+      (config.network.unrestricted ?? false)
+  ) {
+    logForDebugging(
+      `updateConfig: network.unrestricted changed, but the proxy topology ` +
+        `is fixed at initialize() — call reset() then initialize() to ` +
+        `apply. The previous network mode stays in effect.`,
+      { level: 'warn' },
+    )
+  }
   if (
     getPlatform() === 'windows' &&
     config &&
