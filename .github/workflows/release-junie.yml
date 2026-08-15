@@ -1,0 +1,155 @@
+name: Release (JetBrains)
+
+# Builds the standalone macOS `srt` binaries JetBrains Junie bundles and publishes them as GitHub
+# Release assets. Separate from release.yml on purpose: that workflow npm-publishes
+# @anthropic-ai/sandbox-runtime with upstream's credentials, and keeping it byte-identical to
+# upstream keeps rebases mechanical. See docs/jetbrains-build.md.
+
+on:
+  push:
+    tags: ['jb-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # Same system dependencies integration-tests.yml installs on its macOS lane; srt shells out to rg.
+      - run: brew install ripgrep zsh
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            target: bun-darwin-arm64
+          # macos-15-intel is the last x86-64 image Actions offers (until August 2027);
+          # macos-13 was retired on 2025-12-04. Each arch is built on its own native host so
+          # the smoke test below can actually execute the binary it just produced.
+          - arch: x64
+            runner: macos-15-intel
+            target: bun-darwin-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: brew install ripgrep
+
+      - run: npm ci
+
+      - name: Resolve version
+        id: version
+        run: echo "version=$(tr -d '[:space:]' < JB_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Build single-file executable
+        env:
+          ASSET: srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
+        run: |
+          bun build --compile --target=${{ matrix.target }} src/cli.ts --outfile "$ASSET"
+          file "$ASSET"
+          ls -l "$ASSET"
+
+      - name: Smoke test
+        env:
+          ASSET: srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
+        run: ./scripts/smoke-test-srt.sh "./$ASSET"
+
+      - name: Checksum
+        env:
+          ASSET: srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
+        run: shasum -a 256 "$ASSET" | tee "$ASSET.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: srt-darwin-${{ matrix.arch }}
+          path: |
+            srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
+            srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/jb-v')
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify the tag matches JB_VERSION
+        run: |
+          version="$(tr -d '[:space:]' < JB_VERSION)"
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ "$tag" != "jb-v${version}" ]; then
+            echo "Tag $tag does not match JB_VERSION ($version): expected jb-v${version}"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: srt-darwin-*
+          merge-multiple: true
+
+      - name: Assemble third-party notices
+        run: |
+          npm ci --ignore-scripts
+          ./scripts/collect-third-party-licenses.sh
+
+      - name: Verify checksums
+        run: |
+          for f in *.sha256; do
+            shasum -a 256 -c "$f"
+          done
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "jb-v${version}" \
+            --title "srt ${version} (JetBrains build)" \
+            --notes "Unsigned standalone macOS builds of srt ${version} for JetBrains Junie. Consumers must verify the .sha256 assets. See MODIFICATIONS for the delta over upstream." \
+            "srt-${version}-darwin-arm64" \
+            "srt-${version}-darwin-arm64.sha256" \
+            "srt-${version}-darwin-x64" \
+            "srt-${version}-darwin-x64.sha256" \
+            LICENSE \
+            MODIFICATIONS \
+            THIRD-PARTY

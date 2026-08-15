@@ -1,0 +1,7 @@
+This is a modified copy of Anthropic's sandbox-runtime (Apache-2.0).
+
+Modification: Added an opt-in network.unrestricted configuration flag and --unrestricted-network CLI flag that bypasses the proxy-based network filter while keeping the filesystem sandbox.
+
+Upstream URL: https://github.com/anthropic-experimental/sandbox-runtime
+Modified-source URL: https://github.com/paksv/sandbox-runtime
+Base commit: c857ae7
