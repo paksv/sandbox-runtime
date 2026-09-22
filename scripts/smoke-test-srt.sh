@@ -127,7 +127,7 @@ done
 # --- 3. unrestricted network really lets traffic out ---------------------------------------
 if [ "$PLATFORM" = Darwin ]; then
   policy true false empty
-  http_code="$("$SRT" --settings "$SETTINGS" curl --connect-timeout 10 --max-time 30 \
+  http_code="$("$SRT" --settings "$SETTINGS" -- curl --connect-timeout 10 --max-time 30 \
     -sS -o /dev/null -w '%{http_code}' https://example.com)" || fail "unrestricted curl failed"
   [ "$http_code" = "200" ] || fail "curl under network.unrestricted returned '${http_code}', expected 200"
   pass "network.unrestricted allows egress"

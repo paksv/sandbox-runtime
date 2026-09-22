@@ -342,7 +342,7 @@ Uses an **allow-only pattern** - all network access is denied by default.
 Unix sockets are **blocked by default** on both platforms.
 
 - **macOS**: Use `allowUnixSockets` to allow specific paths (e.g., `["/var/run/docker.sock"]`), or `allowAllUnixSockets: true` to allow all.
-- **Linux**: Blocking uses seccomp filters (x64/arm64 only). If seccomp isn't available, sockets are unrestricted and a warning is shown. Use `allowAllUnixSockets: true` to explicitly disable blocking.
+- **Linux**: Blocking uses seccomp filters (x64/arm64 only). If the `apply-seccomp` helper is missing, not executable, or cannot establish the filter, execution fails rather than allowing sockets. Standalone builds look beside `srt` for the matching helper; package-install lookup remains supported. Use `allowAllUnixSockets: true` to explicitly disable blocking without requiring the helper. See [JetBrains builds](docs/jetbrains-build.md) for the supported standalone release layout.
 
 #### Filesystem Configuration
 
