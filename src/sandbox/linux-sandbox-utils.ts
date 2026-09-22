@@ -774,6 +774,11 @@ function resolveApplySeccompPrefix(
     return `ARGV0=${quote([argv0])} ${quote([applyPath])} `
   }
   const binary = getApplySeccompBinaryPath(applyPath)
+  if (binary && !isExecutable(binary)) {
+    throw new Error(
+      `apply-seccomp is not executable at ${binary}; Unix-socket blocking cannot be enabled.`,
+    )
+  }
   return binary ? `${quote([binary])} ` : undefined
 }
 
@@ -1731,7 +1736,8 @@ export async function wrapCommandWithSandboxLinux(
     !hasReadRestrictions &&
     !hasWriteRestrictions &&
     !hasEnvRestrictions &&
-    !hasGitConfig
+    !hasGitConfig &&
+    allowAllUnixSockets
   ) {
     return command
   }
@@ -1758,16 +1764,14 @@ export async function wrapCommandWithSandboxLinux(
       )
 
       if (!applySeccompPrefix) {
-        logForDebugging(
-          '[Sandbox Linux] apply-seccomp binary not available - unix socket blocking disabled. ' +
-            'Install @anthropic-ai/sandbox-runtime globally for full protection.',
-          { level: 'warn' },
-        )
-      } else {
-        logForDebugging(
-          '[Sandbox Linux] Applying seccomp filter for Unix socket blocking',
+        throw new Error(
+          'apply-seccomp not found; Unix-socket blocking cannot be enabled. ' +
+            'Install the matching helper beside srt or set network.allowAllUnixSockets to true.',
         )
       }
+      logForDebugging(
+        '[Sandbox Linux] Applying seccomp filter for Unix socket blocking',
+      )
     } else {
       logForDebugging(
         '[Sandbox Linux] Skipping seccomp filter - allowAllUnixSockets is enabled',

@@ -117,6 +117,14 @@ jobs:
           npm run build:seccomp
           cp "vendor/seccomp/${{ matrix.arch }}/apply-seccomp" "$HELPER"
           file "$HELPER"
+          {
+            printf '\nLinux %s apply-seccomp static dependencies\n' '${{ matrix.arch }}'
+            dpkg-query -W libc6-dev libgcc-13-dev
+            printf '\nSource: https://launchpad.net/ubuntu/+source/glibc\n'
+            printf 'Source: https://launchpad.net/ubuntu/+source/gcc-13\n'
+            cat /usr/share/doc/libc6/copyright /usr/share/doc/gcc-13-base/copyright
+            cat /usr/share/common-licenses/LGPL-2.1 /usr/share/common-licenses/GPL-3
+          } > "THIRD-PARTY-linux-${{ matrix.arch }}"
 
       - name: Linux unit tests
         if: matrix.os == 'linux'
@@ -151,6 +159,7 @@ jobs:
           path: |
             srt-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}*
             apply-seccomp-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}*
+            THIRD-PARTY-linux-${{ matrix.arch }}
           if-no-files-found: error
 
   publish:
@@ -186,6 +195,7 @@ jobs:
         run: |
           npm ci --ignore-scripts
           ./scripts/collect-third-party-licenses.sh
+          cat THIRD-PARTY-linux-x64 THIRD-PARTY-linux-arm64 >> THIRD-PARTY
 
       - name: Verify checksums
         run: |

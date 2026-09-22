@@ -133,6 +133,7 @@ function getLocalSeccompPaths(filename: string): string[] {
   const relativePath = join('vendor', 'seccomp', arch, filename)
 
   return [
+    join(dirname(process.execPath), filename),
     join(baseDir, relativePath), // bundled: same directory as bundle (e.g., when bundled into claude-cli)
     join(baseDir, '..', '..', relativePath), // package root: vendor/seccomp/...
     join(baseDir, '..', relativePath), // dist: dist/vendor/seccomp/...
