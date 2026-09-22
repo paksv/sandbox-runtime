@@ -1,6 +1,6 @@
 name: Release (JetBrains)
 
-# Builds the standalone macOS `srt` binaries JetBrains Junie bundles and publishes them as GitHub
+# Builds the standalone `srt` binaries JetBrains Junie bundles and publishes them as GitHub
 # Release assets. Separate from release.yml on purpose: that workflow npm-publishes
 # @anthropic-ai/sandbox-runtime with upstream's credentials, and keeping it byte-identical to
 # upstream keeps rebases mechanical. See docs/jetbrains-build.md.
@@ -38,7 +38,7 @@ jobs:
       - run: npm test
 
   build:
-    name: Build (${{ matrix.arch }})
+    name: Build (${{ matrix.os }}-${{ matrix.arch }})
     needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -46,14 +46,24 @@ jobs:
       matrix:
         include:
           - arch: arm64
+            os: darwin
             runner: macos-14
             target: bun-darwin-arm64
           # macos-15-intel is the last x86-64 image Actions offers (until August 2027);
           # macos-13 was retired on 2025-12-04. Each arch is built on its own native host so
           # the smoke test below can actually execute the binary it just produced.
           - arch: x64
+            os: darwin
             runner: macos-15-intel
             target: bun-darwin-x64
+          - arch: x64
+            os: linux
+            runner: ubuntu-24.04
+            target: bun-linux-x64-baseline
+          - arch: arm64
+            os: linux
+            runner: ubuntu-24.04-arm
+            target: bun-linux-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +75,25 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - run: brew install ripgrep
+      - if: matrix.os == 'darwin'
+        run: brew install ripgrep
+
+      - if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep build-essential libseccomp-dev python3 apparmor-utils
+          uname -a
+          getconf GNU_LIBC_VERSION
+          lscpu
+
+      - name: Allow namespaces for this smoke-test process
+        if: matrix.os == 'linux'
+        run: |
+          sudo apparmor_parser -r <<'EOF'
+          profile junie-srt-ci flags=(unconfined) {
+            userns,
+          }
+          EOF
 
       - run: npm ci
 
@@ -75,28 +103,54 @@ jobs:
 
       - name: Build single-file executable
         env:
-          ASSET: srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
+          ASSET: srt-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
         run: |
           bun build --compile --target=${{ matrix.target }} src/cli.ts --outfile "$ASSET"
           file "$ASSET"
           ls -l "$ASSET"
 
+      - name: Build native helper
+        if: matrix.os == 'linux'
+        env:
+          HELPER: apply-seccomp-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}
+        run: |
+          npm run build:seccomp
+          cp "vendor/seccomp/${{ matrix.arch }}/apply-seccomp" "$HELPER"
+          file "$HELPER"
+
+      - name: Linux unit tests
+        if: matrix.os == 'linux'
+        run: |
+          npm run build
+          bun test test/sandbox/seccomp-filter.test.ts test/sandbox/seccomp-fail-closed.test.ts test/sandbox/linux-dependency-error.test.ts
+
       - name: Smoke test
         env:
-          ASSET: srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
-        run: ./scripts/smoke-test-srt.sh "./$ASSET"
+          ASSET: srt-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          HELPER: apply-seccomp-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}
+        run: |
+          if [ "${{ matrix.os }}" = linux ]; then
+            aa-exec -p junie-srt-ci -- ./scripts/smoke-test-srt.sh "./$ASSET" "./$HELPER"
+          else
+            ./scripts/smoke-test-srt.sh "./$ASSET"
+          fi
 
       - name: Checksum
         env:
-          ASSET: srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
-        run: shasum -a 256 "$ASSET" | tee "$ASSET.sha256"
+          ASSET: srt-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          HELPER: apply-seccomp-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}
+        run: |
+          shasum -a 256 "$ASSET" | tee "$ASSET.sha256"
+          if [ "${{ matrix.os }}" = linux ]; then
+            shasum -a 256 "$HELPER" | tee "$HELPER.sha256"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: srt-darwin-${{ matrix.arch }}
+          name: srt-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}
-            srt-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.sha256
+            srt-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}*
+            apply-seccomp-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}*
           if-no-files-found: error
 
   publish:
@@ -125,7 +179,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: srt-darwin-*
+          pattern: srt-*
           merge-multiple: true
 
       - name: Assemble third-party notices
@@ -145,11 +199,19 @@ jobs:
         run: |
           gh release create "jb-v${version}" \
             --title "srt ${version} (JetBrains build)" \
-            --notes "Unsigned standalone macOS builds of srt ${version} for JetBrains Junie. Consumers must verify the .sha256 assets. See MODIFICATIONS for the delta over upstream." \
+            --notes "Standalone macOS and Linux builds of srt ${version} for JetBrains Junie. Linux requires system bubblewrap, socat and ripgrep. Install the matching Linux helper beside srt as apply-seccomp. Consumers must verify the .sha256 assets. See MODIFICATIONS and docs/jetbrains-build.md for scope, baseline and licensing." \
             "srt-${version}-darwin-arm64" \
             "srt-${version}-darwin-arm64.sha256" \
             "srt-${version}-darwin-x64" \
             "srt-${version}-darwin-x64.sha256" \
+            "srt-${version}-linux-arm64" \
+            "srt-${version}-linux-arm64.sha256" \
+            "srt-${version}-linux-x64" \
+            "srt-${version}-linux-x64.sha256" \
+            "apply-seccomp-${version}-linux-arm64" \
+            "apply-seccomp-${version}-linux-arm64.sha256" \
+            "apply-seccomp-${version}-linux-x64" \
+            "apply-seccomp-${version}-linux-x64.sha256" \
             LICENSE \
             MODIFICATIONS \
             THIRD-PARTY
