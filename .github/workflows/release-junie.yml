@@ -16,7 +16,7 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +47,7 @@ jobs:
         include:
           - arch: arm64
             os: darwin
-            runner: macos-14
+            runner: macos-15
             target: bun-darwin-arm64
           # macos-15-intel is the last x86-64 image Actions offers (until August 2027);
           # macos-13 was retired on 2025-12-04. Each arch is built on its own native host so
@@ -166,7 +166,7 @@ jobs:
     name: Publish release
     needs: build
     if: startsWith(github.ref, 'refs/tags/jb-v')
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
     steps:

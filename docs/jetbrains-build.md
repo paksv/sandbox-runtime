@@ -27,7 +27,7 @@ the unrestricted-network change, the Linux helper changes and the JetBrains-only
 
 ## Versioning
 
-The version of record is the `JB_VERSION` file: `<upstream version>-jb.<n>`, currently `0.0.71-jb.2`.
+The version of record is the `JB_VERSION` file: `<upstream version>-jb.<n>`, currently `0.0.71-jb.3`.
 
 - Bump `<n>` when you rebuild the same upstream version (a workflow fix, a new dependency lockfile).
 - Bump the upstream part after a rebase onto a new upstream release, and reset `<n>` to 1.
@@ -41,12 +41,12 @@ The version of record is the `JB_VERSION` file: `<upstream version>-jb.<n>`, cur
 ```bash
 # 1. optional: rebase onto a new upstream release first
 # 2. bump the version of record
-echo "0.0.71-jb.3" > JB_VERSION
-git commit -am "chore: JB_VERSION 0.0.71-jb.3"
+echo "0.0.71-jb.4" > JB_VERSION
+git commit -am "chore: JB_VERSION 0.0.71-jb.4"
 
 # 3. tag and push — the tag is the trigger
-git tag jb-v0.0.71-jb.3
-git push origin main jb-v0.0.71-jb.3
+git tag jb-v0.0.71-jb.4
+git push origin main jb-v0.0.71-jb.4
 ```
 
 The workflow refuses to publish if the tag does not equal `jb-v$(cat JB_VERSION)`, if `npm run build`
@@ -61,21 +61,21 @@ four platform/architecture combinations and smoke-tests them, and skips publicat
 
 ## Published assets
 
-For `JB_VERSION=0.0.71-jb.2`, tag `jb-v0.0.71-jb.2`:
+For `JB_VERSION=0.0.71-jb.3`, tag `jb-v0.0.71-jb.3`:
 
 ```
-srt-0.0.71-jb.2-darwin-arm64
-srt-0.0.71-jb.2-darwin-arm64.sha256
-srt-0.0.71-jb.2-darwin-x64
-srt-0.0.71-jb.2-darwin-x64.sha256
-srt-0.0.71-jb.2-linux-arm64
-srt-0.0.71-jb.2-linux-arm64.sha256
-srt-0.0.71-jb.2-linux-x64
-srt-0.0.71-jb.2-linux-x64.sha256
-apply-seccomp-0.0.71-jb.2-linux-arm64
-apply-seccomp-0.0.71-jb.2-linux-arm64.sha256
-apply-seccomp-0.0.71-jb.2-linux-x64
-apply-seccomp-0.0.71-jb.2-linux-x64.sha256
+srt-0.0.71-jb.3-darwin-arm64
+srt-0.0.71-jb.3-darwin-arm64.sha256
+srt-0.0.71-jb.3-darwin-x64
+srt-0.0.71-jb.3-darwin-x64.sha256
+srt-0.0.71-jb.3-linux-arm64
+srt-0.0.71-jb.3-linux-arm64.sha256
+srt-0.0.71-jb.3-linux-x64
+srt-0.0.71-jb.3-linux-x64.sha256
+apply-seccomp-0.0.71-jb.3-linux-arm64
+apply-seccomp-0.0.71-jb.3-linux-arm64.sha256
+apply-seccomp-0.0.71-jb.3-linux-x64
+apply-seccomp-0.0.71-jb.3-linux-x64.sha256
 LICENSE
 MODIFICATIONS
 THIRD-PARTY
@@ -110,7 +110,7 @@ runtime. Signing here would only be thrown away.
 
 | Architecture | Runner label | Note |
 |---|---|---|
-| arm64 | `macos-14` | |
+| arm64 | `macos-15` | |
 | x86-64 | `macos-15-intel` | `macos-13` was retired on 2025-12-04. This is the **last** Intel image GitHub Actions offers, available until **August 2027** — after that the x64 asset needs a different build host (a self-hosted Intel Mac, or cross-compiling and giving up the native smoke test). |
 | Linux x86-64 | `ubuntu-24.04` | `bun-linux-x64-baseline`, SSE4.2 CPU target. |
 | Linux arm64 | `ubuntu-24.04-arm` | `bun-linux-arm64`, native AArch64. |
