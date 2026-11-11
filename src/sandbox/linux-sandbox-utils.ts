@@ -3779,7 +3779,21 @@ export async function wrapCommandWithSandboxLinux(
     } else {
       // network.unrestricted: no --unshare-net, so the child stays in the
       // HOST network namespace. Egress is unfiltered AND host loopback
-      // services (a local DB, another SRT proxy) are reachable.
+      // services (a local DB, another SRT proxy) are reachable. Still emit
+      // the non-proxy sandbox env (SANDBOX_RUNTIME=1, TMPDIR).
+      const baseEnv = generateProxyEnvVars(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        writeConfig === undefined,
+      )
+      bwrapArgs.push(
+        ...baseEnv.flatMap((env: string) => {
+          const firstEq = env.indexOf('=')
+          return ['--setenv', env.slice(0, firstEq), env.slice(firstEq + 1)]
+        }),
+      )
       logForDebugging(
         '[Sandbox] network unrestricted: sharing the host network ' +
           'namespace (no --unshare-net, no proxy bridge)',

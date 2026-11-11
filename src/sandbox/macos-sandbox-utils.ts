@@ -1255,13 +1255,16 @@ function generateSandboxProfile({
   // Network rules
   profile.push('; Network')
   if (!needsNetworkRestriction) {
-    // network.unrestricted. No extra mach-lookup entries are added here on
-    // purpose: verified that under (allow network*) getaddrinfo, curl's
-    // HTTPS handshake and node's fetch all succeed with the mach allowlist
-    // above, even though the profile is (deny default) and lists no
-    // resolver or trustd service. If a specific runtime needs one,
-    // allowMachLookup is the user-level escape hatch.
+    // network.unrestricted: allow system trust evaluation alongside direct
+    // network access. TrustEvaluationAgent (/usr/bin/curl, Security.framework)
+    // and trustd.agent (Go crypto/x509) are only withheld under restricted
+    // network because their AIA/OCSP fetches bypass the proxy; with
+    // (allow network*) there is no network boundary to bypass.
     profile.push('(allow network*)')
+    profile.push(
+      '(allow mach-lookup (global-name "com.apple.TrustEvaluationAgent"))',
+    )
+    profile.push('(allow mach-lookup (global-name "com.apple.trustd.agent"))')
   } else {
     // Allow local binding if requested.
     //
